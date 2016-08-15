@@ -1,0 +1,118 @@
+% phage_mutatioN(Phage, -Rate)
+% mcount(+Phage, -Total)
+% fatal(+Phage)  Fatal mutation count
+%
+basalM(10).
+maxM(10000).
+
+sublist( [], _ ).
+sublist( [X|XS], [X|XSS] ) :- sublist( XS, XSS ).
+
+gene_mutation([_,_,C,_],MRate) :-
+	basalM(B),
+	maxM(High),
+	( (C < 50 ; C > 3000)
+	 -> MRate is B + High
+	; MRate is B + abs(C-1500)
+	).
+
+mutant(Genome,F,MRate) :-
+	random_between(0,3,Gene),
+	mutate(Genome,Gene,F,MRate).
+
+% Mutate the Genome (4 ints)
+mutate([],_,[],_).                        % end of Genome
+mutate([P|Ps],0,[F|Fs],MR) :- % mutate this Gene
+	!,
+	random_between(0,31,RBit),
+	F is P xor (0x1<<RBit),
+	mutate(Ps,-1,Fs,MR).
+mutate([G|Ps],This,[G|Fs],MR) :-  % clone Gene
+	Next is This - 1,
+	mutate(Ps,Next,Fs,MR).
+
+mcount(phage([A,B,_,D]), Total) :- % Total Mutations: ignore evolving gene(C)
+  	ones(31, A,    0, AOut),
+	ones(31, B, AOut, BOut),
+ 	ones(31, D, BOut, Total).
+
+notfatal(P) :- \+ fatal(P).
+
+fatal(P) :- mcount(P,Total), Total > 10.
+fatal(phage([A,_,_,_])) :- A > 3000, A < 4000.
+fatal(phage([_,B,_,_])) :- B > 1000, B < 2000.
+fatal(phage([_,_,_,D])) :- D > 5000, D < 100000.
+
+ones(G,Ones) :-
+        ones(31,G,0,Ones).
+
+ones(0,_,Ones,Ones).
+ones(N,G,In,Out) :-
+	N>0,
+	Bit is G /\ (1<<N),
+	(Bit =:= 1 -> Next is In + 1 ; Next = In ),
+	NN is N - 1,
+	ones(NN,G,Next,Out).
+
+countClones(List) :-
+	sort(List, Unique),
+	length(Unique,Mutants),
+	Clones is 100-Mutants,
+	writeln(clones(Clones)).
+
+test :-
+	make_phage(100,P1,[]),
+	evolve(P1).
+
+evolve(P1) :-
+	life_cycle(P1,F1),
+	countClones(F1),
+	evolve(F1).
+	
+
+make_phage(0) --> !, [].
+make_phage(N) --> [ phage([1,1,1,1]) ],
+	{ NN is N-1 },
+	make_phage(NN).
+
+life_cycle(P1,F1) :-
+	propagate_phage(P1,Lagoon,[]),
+	sublist(notfatal,Lagoon,Survivors),
+	length(Survivors,NumS),
+	write(survivors(NumS)),write(' '),
+	random_permutation(Survivors,Mixed),
+	length(F1,100),
+	sublist(F1,Mixed).
+
+% Turn 100 Phage into 10000 (100 for each)
+propagate_phage([])      --> !, [].
+propagate_phage([phage(Genome)|Ps])  --> 
+	propagate_1phage(100,Genome),
+	propagate_phage(Ps).
+
+propagate_1phage(0,_)      --> !, [].
+propagate_1phage(N,Genome) --> [ phage(MGenome) ],
+	{ gene_mutation(Genome,MRate),
+	  mutant(Genome,MGenome,MRate),
+	  NN is N-1
+	},
+	propagate_1phage(NN,Genome).
+
+
+% param(Entity,Type,Cmd,Value)
+% param(Who,What,Range,Value)
+removePrevious(Term) :-
+	Term =.. [F|Args],
+	append(Front,[_],Args),
+	append(Front,[_],PArgs),
+	PTerm =.. [F|PArgs],
+	retractall(PTerm).
+
+%1) Send 'h' to each Entity
+%2) write result to <Entity>.pl with Entity/Type 
+%
+write_configuration(CList) :-
+	memberchk(Cmd,CList),
+	arg(Cmd,1,Entity),
+	open(Entity,write,Stream),
+	maplist(writeq(Stream),CList).
