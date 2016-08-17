@@ -1,9 +1,52 @@
+%%%%%%%%%%% RUNNING EXTERNAL PROGRAMS (python, etc.)
+:- use_module(library(process)).
+:- use_module(library(charsio)).
+:- use_module(library(helpidx)).
+:- use_module(library(lists)).
+:- use_module(library(ctypes)).
+
+windows :- current_prolog_flag(windows,true).
+unix    :- current_prolog_flag(unix,true).
+
+% Executable paths for Python (for display with matplotlib)
+
+python('C:\\Python27\\python.exe')         :- gethostname(elapse),!.
+python('C:\\cygwin\\Python27\\python.exe') :- windows, !.
+python('/usr/bin/python').
+home('C:\\cygwin\\home\\peterr\\src\\MSelection') :- windows, !.
+home('/home/peter/src/MSelection').
+
+plotpgm('import matplotlib.pyplot as plt\nf = open(\'plot.data\',\'r\')\nlist = eval(f.read())\nprint("LIST is " + str(list))\nplt.plot(list)\nplt.ylabel(\'total mutant population\')\nplt.show()\n').
+
 % phage_mutatioN(Phage, -Rate)
 % mcount(+Phage, -Total)
 % fatal(+Phage)  Fatal mutation count
 %
-basalM(10).
+
+basalM(50).
 maxM(10000).
+
+openplot :-
+	open('plot.data',write,Stream),
+	write(Stream,'['),
+	assert(plotstream(Stream)).
+
+plotpoint(V) :-
+	plotstream(Stream),
+	write(Stream,V),
+	write(Stream,',').
+
+showplot :- 
+	plotstream(Stream),
+	flush_output(Stream),
+	python(Python),
+	home(Dir),
+	process_create(Python,	['./plotit.py','plot.data'],
+		[ stderr(std), cwd(Dir), process(PID) ]),
+	writeln(pid(PID)).
+
+showplot.
+
 
 sublist( [], _ ).
 sublist( [X|XS], [X|XSS] ) :- sublist( XS, XSS ).
@@ -11,14 +54,25 @@ sublist( [X|XS], [X|XSS] ) :- sublist( XS, XSS ).
 gene_mutation([_,_,C,_],MRate) :-
 	basalM(B),
 	maxM(High),
-	( (C < 50 ; C > 3000)
+	( (C < 5000 ; C > 3000000)
 	 -> MRate is B + High
-	; MRate is B + abs(C-1500)
+	; MRate is B + integer(abs(C-1500000)/10000)
 	).
 
-mutant(Genome,F,MRate) :-
+mutant0(MRate, Clone,Clone) :-
+	MRate > 0,
+	MRate < 500,
+	random_between(0,MRate,Thresh),
+	Thresh > MRate/90,
+	!.
+mutant0(M, Gin,Gout) :- mutant(M, Gin, Gout).
+
+mutant(Rate, Genome,Genome) :- Rate < 1, !.% , write('+').
+mutant(MRate, GenomeIn, GenomeOut) :-
 	random_between(0,3,Gene),
-	mutate(Genome,Gene,F,MRate).
+	mutate(GenomeIn,Gene,GenomeNext,MRate),
+	NewRate is MRate>>1,
+	mutant(NewRate, GenomeNext, GenomeOut).
 
 % Mutate the Genome (4 ints)
 mutate([],_,[],_).                        % end of Genome
@@ -31,17 +85,17 @@ mutate([G|Ps],This,[G|Fs],MR) :-  % clone Gene
 	Next is This - 1,
 	mutate(Ps,Next,Fs,MR).
 
-mcount(phage([A,B,_,D]), Total) :- % Total Mutations: ignore evolving gene(C)
+mcount(phage([A,B,_,D],_), Total) :- % Total Mutations: ignore evolving gene(C)
   	ones(31, A,    0, AOut),
 	ones(31, B, AOut, BOut),
  	ones(31, D, BOut, Total).
 
 notfatal(P) :- \+ fatal(P).
 
-fatal(P) :- mcount(P,Total), Total > 10.
-fatal(phage([A,_,_,_])) :- A > 3000, A < 4000.
-fatal(phage([_,B,_,_])) :- B > 1000, B < 2000.
-fatal(phage([_,_,_,D])) :- D > 5000, D < 100000.
+fatal(P) :- mcount(P,Total), Total > 10, !.
+fatal(phage([A,_,_,_],_)) :- A > 4000000, A < 800000000,!.
+fatal(phage([_,B,_,_],_)) :- B > 1000, B < 50000000,!.
+fatal(phage([_,_,_,D],_)) :- D > 5000, D < 100000,!.
 
 ones(G,Ones) :-
         ones(31,G,0,Ones).
@@ -55,25 +109,56 @@ ones(N,G,In,Out) :-
 	ones(NN,G,Next,Out).
 
 countClones(List) :-
+	length(List,Total),
 	sort(List, Unique),
 	length(Unique,Mutants),
-	Clones is 100-Mutants,
-	writeln(clones(Clones)).
+	Clones is Total-Mutants,
+	write('ALLCLONES'(Clones)).
 
-test :-
-	make_phage(100,P1,[]),
-	evolve(P1).
+find_winner(List, G) :-
+	msort(List,SList),
+	countdups(SList,CountList),
+	sort(CountList,WinnerList),
+	append(_,[F:phage([_,_,C,_],_)],WinnerList),
+	!,
+	Run is integer(G*15/(60.0*24.0)),
+	writeln(winner(C,generation(G),days(Run),clones(F))),
+	plotpoint(F).
 
-evolve(P1) :-
+find_winner(_,_).
+
+countdups([],[]).
+countdups([A,A|T],[Count:A|NT]) :-
+	count_string(T,A,2,Count,Rest),
+	countdups(Rest,NT).
+countdups([_|T],NT) :- % Don't count singletons
+	countdups(T,NT).
+
+count_string([],_,Count,Count,[]) :- !.
+count_string([H|T],H,In,Out,Rest) :- !,
+	Count is In + 1,
+	count_string(T,H,Count,Out,Rest).
+count_string(Rest,_,Count,Count,Rest).
+
+
+test :- openplot,
+	maxM(MRate),
+	make_phage(100,MRate,P1,[]),
+	evolve(P1,0).
+
+evolve(P1,G) :-
 	life_cycle(P1,F1),
 	countClones(F1),
-	evolve(F1).
-	
+	find_winner(F1,G),
+	ModGen is G mod 100,
+	( ModGen =:= 0 -> showplot ; true ),
+	GP is G + 1,
+	evolve(F1,GP).
 
-make_phage(0) --> !, [].
-make_phage(N) --> [ phage([1,1,1,1]) ],
+make_phage(0,_) --> !, [].
+make_phage(N,M) --> [ phage([1,1,2012,1],M) ],
 	{ NN is N-1 },
-	make_phage(NN).
+	make_phage(NN,M).
 
 life_cycle(P1,F1) :-
 	propagate_phage(P1,Lagoon,[]),
@@ -86,17 +171,18 @@ life_cycle(P1,F1) :-
 
 % Turn 100 Phage into 10000 (100 for each)
 propagate_phage([])      --> !, [].
-propagate_phage([phage(Genome)|Ps])  --> 
-	propagate_1phage(100,Genome),
+propagate_phage([phage(Genome,Mut)|Ps])  --> 
+	propagate_1phage(100,Genome,Mut),
 	propagate_phage(Ps).
 
-propagate_1phage(0,_)      --> !, [].
-propagate_1phage(N,Genome) --> [ phage(MGenome) ],
-	{ gene_mutation(Genome,MRate),
-	  mutant(Genome,MGenome,MRate),
+propagate_1phage(0,_,_)      --> !, [].
+propagate_1phage(N,Genome,MRate) --> [ phage(MGenome,NewRate) ],
+	{ 
+	  mutant0(MRate, Genome, MGenome),
+	  gene_mutation(MGenome,NewRate),
 	  NN is N-1
 	},
-	propagate_1phage(NN,Genome).
+	propagate_1phage(NN,Genome,MRate).
 
 
 % param(Entity,Type,Cmd,Value)
